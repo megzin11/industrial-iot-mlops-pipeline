@@ -1,10 +1,12 @@
+.vs/
+.vscode/
 venv/
 __pycache__/
 *.pyc
 .env
-.vscode/
 .pytest_cache/
-*.xes
-*.xes.gz
 *.db
-*.sqlite 
+*.db-wal
+*.db-shm
+*.sqlite
+artifacts/*.joblib

@@ -1,67 +1,63 @@
-import streamlit as st
-import pandas as pd
 import time
-from sqlalchemy import create_engine
+import pandas as pd
+import streamlit as st
 
-# --- CONFIGURATION ---
-DB_PATH = "sqlite:///warehouse.db"
-engine = create_engine(DB_PATH)
+from src.models import DEFAULT_DB_URL, create_warehouse_engine
 
-# Configure the web page
-st.set_page_config(page_title="BE PRESS MLOps Dashboard", layout="wide")
-st.title("🏭 BE PRESS: Live Telemetry & AI Anomaly Detection")
-st.markdown("Real-time industrial sensor stream with Isolation Forest inference.")
+st.set_page_config(page_title="Industrial IoT MLOps Monitor", layout="wide")
+st.title("Industrial IoT Streaming & Explainable Anomaly Monitor")
+st.caption("Live MQTT telemetry scored by EmpiricalCovariance Mahalanobis detector with Z-score attribution (SQLite WAL).")
+engine = create_warehouse_engine(DEFAULT_DB_URL)
 
-# Create permanent UI placeholders that we will update in a loop
-metric_placeholder = st.empty()
-chart_placeholder = st.empty()
-log_placeholder = st.empty()
+with st.sidebar:
+    window_size = st.slider("Rolling Window (frames)", min_value=30, max_value=300, value=90, step=30)
+    auto_refresh = st.checkbox("Auto-refresh (2s)", value=True)
 
-def fetch_latest_data():
-    """Pulls the last 60 seconds of telemetry from the SQL warehouse."""
-    query = "SELECT * FROM telemetry_stream ORDER BY id DESC LIMIT 60"
+
+def fetch_latest(limit: int) -> pd.DataFrame:
+    query = f"SELECT * FROM telemetry_stream ORDER BY id DESC LIMIT {int(limit)}"
     try:
         df = pd.read_sql(query, engine)
-        # Reverse the dataframe so chronological order goes left-to-right on the chart
-        return df.iloc[::-1] 
+        return df.iloc[::-1].reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
 
-# --- REAL-TIME DASHBOARD LOOP ---
-while True:
-    df = fetch_latest_data()
-    
-    if not df.empty:
-        latest = df.iloc[-1]
-        anomalies = df[df['is_anomaly'] == True]
-        
-        # 1. Update the Top Metric Cards
-        with metric_placeholder.container():
-            c1, c2, c3 = st.columns(3)
-            status = "🔴 AI INTERCEPT: CRITICAL" if latest['is_anomaly'] else "🟢 NORMAL OPERATION"
-            
-            c1.metric("System Status", status)
-            c2.metric("Roller Temp (°C)", f"{latest['roller_temp_c']:.1f}")
-            c3.metric("Vibration (Hz)", f"{latest['vibration_hz']:.1f}")
-        
-        # 2. Update the Live Time-Series Chart
-        with chart_placeholder.container():
-            # Standardize index for charting
-            chart_data = df.set_index("timestamp")[["roller_temp_c", "vibration_hz"]]
-            st.line_chart(chart_data, color=["#3498db", "#e74c3c"])
-            
-        # 3. Update the Anomaly Database Log
-        with log_placeholder.container():
-            st.subheader("🛑 Recent AI Intercepts")
-            if not anomalies.empty:
-                st.dataframe(
-                    anomalies[['timestamp', 'roller_temp_c', 'vibration_hz']].tail(5), 
-                    use_container_width=True,
-                    hide_index=True
-                )
-            else:
-                st.info("No anomalies detected in the current window.")
 
-    # Pause for 1 second, then force Streamlit to refresh the UI
-    time.sleep(1)
+df = fetch_latest(window_size)
+
+if df.empty:
+    st.info("Waiting for telemetry frames in SQLite warehouse. Start `python -m src.02_mlops_consumer` and `python -m src.01_edge_sensor`.")
+else:
+    latest = df.iloc[-1]
+    anomalies = df[df["is_anomaly"] == True]  # noqa: E712
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("System Status", "ALERT" if latest["is_anomaly"] else "NORMAL", latest["primary_driver"])
+    c2.metric("Roller Temp (C)", f"{latest['roller_temp_c']:.2f}")
+    c3.metric("Vibration (Hz)", f"{latest['vibration_hz']:.2f}")
+    c4.metric("Motor Current (A)", f"{latest['motor_current_a']:.2f}")
+    c5.metric("Avg Inference", f"{df['inference_ms'].mean():.2f} ms")
+
+    st.subheader("Live Multi-Sensor Telemetry Stream")
+    chart_df = df.set_index("timestamp")[["roller_temp_c", "vibration_hz", "motor_current_a"]]
+    st.line_chart(chart_df)
+
+    st.subheader(f"Auditable Anomaly Log ({len(anomalies)} alerts in last {len(df)} frames)")
+    if not anomalies.empty:
+        cols = [
+            "timestamp",
+            "machine_id",
+            "roller_temp_c",
+            "vibration_hz",
+            "motor_current_a",
+            "anomaly_score",
+            "primary_driver",
+            "model_version",
+        ]
+        st.dataframe(anomalies[cols].tail(10), use_container_width=True, hide_index=True)
+    else:
+        st.success("Zero anomalies detected in the active window.")
+
+if auto_refresh:
+    time.sleep(2)
     st.rerun()

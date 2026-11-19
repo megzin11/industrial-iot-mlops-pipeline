@@ -3,3 +3,6 @@ SQLAlchemy
 scikit-learn
 pandas
 streamlit
+joblib
+matplotlib 
+pytest
