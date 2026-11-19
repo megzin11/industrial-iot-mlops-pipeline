@@ -1,0 +1,5 @@
+paho-mqtt
+SQLAlchemy
+scikit-learn
+pandas
+streamlit
